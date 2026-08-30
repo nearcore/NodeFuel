@@ -131,44 +131,62 @@ object CodexAuth {
     }
   }
 
-  fun exchangeCodeForTokens(code: String, codeVerifier: String): CodexTokens? {
-    return try {
-      val body =
-        listOf(
-            "grant_type" to "authorization_code",
-            "code" to code,
-            "redirect_uri" to REDIRECT_URI,
-            "client_id" to CLIENT_ID,
-            "code_verifier" to codeVerifier,
-          )
-          .joinToString("&") { (k, v) -> "${Uri.encode(k)}=${Uri.encode(v)}" }
+  /**
+   * The instant the Custom Tab opens, our app is backgrounded - and some
+   * OEM skins (Samsung's One UI included) briefly block a backgrounded
+   * app's outbound network/DNS until it's back in the foreground or a
+   * moment has passed. That window lands right here: the browser posts
+   * the callback to our loopback server the instant login finishes, so
+   * this call can fire before the OS lifts that block. A few retries with
+   * a short backoff ride out that window instead of failing on attempt 1.
+   */
+  fun exchangeCodeForTokens(code: String, codeVerifier: String, maxAttempts: Int = 5): CodexTokens? {
+    val body =
+      listOf(
+          "grant_type" to "authorization_code",
+          "code" to code,
+          "redirect_uri" to REDIRECT_URI,
+          "client_id" to CLIENT_ID,
+          "code_verifier" to codeVerifier,
+        )
+        .joinToString("&") { (k, v) -> "${Uri.encode(k)}=${Uri.encode(v)}" }
 
-      val conn = URL(TOKEN_ENDPOINT).openConnection() as HttpURLConnection
-      conn.requestMethod = "POST"
-      conn.doOutput = true
-      conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-      conn.connectTimeout = 10_000
-      conn.readTimeout = 10_000
-      conn.outputStream.use { it.write(body.toByteArray()) }
+    for (attempt in 1..maxAttempts) {
+      try {
+        val conn = URL(TOKEN_ENDPOINT).openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+        conn.connectTimeout = 10_000
+        conn.readTimeout = 10_000
+        conn.outputStream.use { it.write(body.toByteArray()) }
 
-      if (conn.responseCode != 200) {
-        val err = conn.errorStream?.bufferedReader()?.use { it.readText() }
-        Log.w(TAG, "Codex OAuth token exchange failed: HTTP ${conn.responseCode} $err")
-        return null
+        if (conn.responseCode != 200) {
+          val err = conn.errorStream?.bufferedReader()?.use { it.readText() }
+          Log.w(TAG, "Codex OAuth token exchange failed: HTTP ${conn.responseCode} $err")
+          return null // a real HTTP error response - retrying won't help
+        }
+        val responseBody = conn.inputStream.bufferedReader().use { it.readText() }
+        val json = JSONObject(responseBody)
+        val accessToken = json.optString("access_token", "")
+        if (accessToken.isBlank()) {
+          Log.w(TAG, "Codex OAuth: token response had no access_token: $responseBody")
+          return null
+        }
+        val refreshToken = json.optString("refresh_token", "").ifBlank { null }
+        return CodexTokens(accessToken = accessToken, refreshToken = refreshToken)
+      } catch (e: java.io.IOException) {
+        // Network-layer failure (DNS/connect/etc) - most likely the
+        // backgrounded-app network block above. Back off and retry.
+        Log.w(TAG, "Codex OAuth token exchange network error (attempt $attempt/$maxAttempts)", e)
+        if (attempt == maxAttempts) return null
+        Thread.sleep(attempt * 600L) // 600ms, 1200ms, 1800ms, 2400ms
+      } catch (e: Exception) {
+        Log.w(TAG, "Codex OAuth token exchange error", e)
+        return null // not a network error - retrying won't help
       }
-      val responseBody = conn.inputStream.bufferedReader().use { it.readText() }
-      val json = JSONObject(responseBody)
-      val accessToken = json.optString("access_token", "")
-      if (accessToken.isBlank()) {
-        Log.w(TAG, "Codex OAuth: token response had no access_token: $responseBody")
-        return null
-      }
-      val refreshToken = json.optString("refresh_token", "").ifBlank { null }
-      CodexTokens(accessToken = accessToken, refreshToken = refreshToken)
-    } catch (e: Exception) {
-      Log.w(TAG, "Codex OAuth token exchange error", e)
-      null
     }
+    return null
   }
 
   /**
