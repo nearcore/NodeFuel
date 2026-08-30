@@ -1,6 +1,7 @@
 package com.example.nodefuel.ui.main
 
 import android.app.Application
+import android.content.Intent
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -69,7 +70,13 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
   fun openCodexLogin() {
     val authUrl = repository.startCodexLogin()
     codexLoginStatus = "Waiting for you to finish logging in..."
-    CustomTabsIntent.Builder().build().launchUrl(getApplication(), authUrl)
+    // getApplication() is an Application Context, not an Activity Context -
+    // launching a Custom Tab (which is really just startActivity() under
+    // the hood) from a non-Activity context requires this flag or Android
+    // throws AndroidRuntimeException and the app crashes.
+    val customTabsIntent = CustomTabsIntent.Builder().build()
+    customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    customTabsIntent.launchUrl(getApplication(), authUrl)
     viewModelScope.launch {
       val success = repository.awaitCodexLoginResult()
       codexLoginStatus = null
