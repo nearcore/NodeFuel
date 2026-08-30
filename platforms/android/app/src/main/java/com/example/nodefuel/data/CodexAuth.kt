@@ -190,9 +190,16 @@ object CodexAuth {
   }
 
   /**
-   * Fetches Codex/ChatGPT usage. Endpoint is confirmed (from the Codex CLI
-   * source), but its exact response field names aren't - same defensive,
-   * log-and-try-a-few-shapes approach as the Claude usage parser.
+   * Fetches Codex/ChatGPT usage. Confirmed shape (from a real device log,
+   * `adb logcat -s NodeFuel`, 2026-08-30):
+   *   { "rate_limit": {
+   *       "primary_window":   { "used_percent": 0, "reset_at": 1788144282 },
+   *       "secondary_window": { "used_percent": 0, "reset_at": 1788731082 }
+   *   }, "credits": { "balance": "43.6299990000" }, ... }
+   * used_percent is already 0-100 (not a 0-1 fraction), and reset_at is
+   * raw Unix seconds (not an ISO date string like Claude's endpoint) -
+   * primary_window is the ~5h rolling window (mirrors Claude's "session"),
+   * secondary_window is the weekly one.
    */
   fun fetchUsage(accessToken: String): ProviderStatus? {
     return try {
@@ -205,50 +212,20 @@ object CodexAuth {
         return null
       }
       val body = conn.inputStream.bufferedReader().use { it.readText() }
-      Log.d(TAG, "Codex usage response: $body") // grab via `adb logcat -s NodeFuel` if parsing below needs adjusting
+      Log.d(TAG, "Codex usage response: $body") // grab via `adb logcat -s NodeFuel` if this shape ever drifts
 
-      val json = JSONObject(body)
-      val sessionPercent = extractPercent(json, "five_hour", "session", "primary")
-      val weeklyPercent = extractPercent(json, "seven_day", "weekly", "week", "secondary")
-      val resetsAtMillis = extractResetMillis(json, "five_hour", "session", "primary")
+      val rateLimit = JSONObject(body).optJSONObject("rate_limit")
+      val primary = rateLimit?.optJSONObject("primary_window")
+      val secondary = rateLimit?.optJSONObject("secondary_window")
+
+      val sessionPercent = primary?.let { if (it.has("used_percent")) it.getInt("used_percent") else null }
+      val weeklyPercent = secondary?.let { if (it.has("used_percent")) it.getInt("used_percent") else null }
+      val resetsAtMillis = primary?.let { if (it.has("reset_at")) it.getLong("reset_at") * 1000 else null }
 
       ProviderStatus(mode = "usage", sessionPercent = sessionPercent, weeklyPercent = weeklyPercent, resetsAtMillis = resetsAtMillis)
     } catch (e: Exception) {
       Log.w(TAG, "Codex usage fetch error", e)
       null
     }
-  }
-
-  private fun extractPercent(json: JSONObject, vararg keys: String): Int? {
-    for (key in keys) {
-      val obj = json.optJSONObject(key) ?: continue
-      for (field in listOf("utilization", "used_percent", "usedPercent", "percent_used", "percent")) {
-        if (obj.has(field)) {
-          val raw = obj.opt(field)
-          val value = (raw as? Number)?.toDouble() ?: (raw as? String)?.toDoubleOrNull()
-          if (value != null) return (if (value <= 1.0) value * 100 else value).toInt()
-        }
-      }
-    }
-    return null
-  }
-
-  private fun extractResetMillis(json: JSONObject, vararg keys: String): Long? {
-    for (key in keys) {
-      val obj = json.optJSONObject(key) ?: continue
-      for (field in listOf("resets_at", "resetsAt", "reset_at", "resetAt")) {
-        val raw = obj.optString(field, "")
-        if (raw.isNotBlank()) {
-          try {
-            val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
-            fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
-            fmt.parse(raw)?.let { return it.time }
-          } catch (e: Exception) {
-            // try the next key/field combination
-          }
-        }
-      }
-    }
-    return null
   }
 }
