@@ -1,6 +1,9 @@
 package com.example.nodefuel.ui.main
 
 import android.app.Application
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.nodefuel.data.DataRepository
@@ -14,6 +17,9 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
   val openai = repository.openai
   val refreshing = repository.refreshing
 
+  var showLogin by mutableStateOf(false)
+    private set
+
   init {
     refresh()
   }
@@ -26,6 +32,27 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
 
   fun saveConfig(config: NodeFuelConfig) {
     repository.saveConfig(config)
+    refresh()
+  }
+
+  fun isClaudeLoggedIn(): Boolean = repository.isClaudeLoggedIn()
+
+  fun openClaudeLogin() {
+    showLogin = true
+  }
+
+  fun onClaudeSessionCaptured(sessionKey: String) {
+    repository.saveClaudeSessionKey(sessionKey)
+    showLogin = false
+    refresh()
+  }
+
+  fun cancelClaudeLogin() {
+    showLogin = false
+  }
+
+  fun logOutOfClaude() {
+    repository.clearClaudeSession()
     refresh()
   }
 }

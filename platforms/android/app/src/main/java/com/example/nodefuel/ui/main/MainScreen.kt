@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -39,6 +40,7 @@ import androidx.navigation3.runtime.NavKey
 import com.example.nodefuel.data.NodeFuelConfig
 import com.example.nodefuel.data.ProviderStatus
 import com.example.nodefuel.theme.NodeFuelTheme
+import com.example.nodefuel.ui.login.ClaudeLoginScreen
 
 private val NeonCyan = Color(0xFF00D9FF)
 private val NeonPink = Color(0xFFFF006E)
@@ -51,6 +53,14 @@ fun MainScreen(
   modifier: Modifier = Modifier,
   viewModel: MainScreenViewModel = viewModel(),
 ) {
+  if (viewModel.showLogin) {
+    ClaudeLoginScreen(
+      onSessionCaptured = viewModel::onClaudeSessionCaptured,
+      modifier = modifier,
+    )
+    return
+  }
+
   val anthropic by viewModel.anthropic.collectAsStateWithLifecycle(ProviderStatus("none"))
   val openai by viewModel.openai.collectAsStateWithLifecycle(ProviderStatus("none"))
   val refreshing by viewModel.refreshing.collectAsStateWithLifecycle(false)
@@ -92,10 +102,13 @@ fun MainScreen(
       if (showSettings) {
         SettingsSection(
           initial = viewModel.loadConfig(),
+          claudeLoggedIn = viewModel.isClaudeLoggedIn(),
           onSave = { config ->
             showSettings = false
             viewModel.saveConfig(config)
           },
+          onLoginClaude = viewModel::openClaudeLogin,
+          onLogoutClaude = viewModel::logOutOfClaude,
         )
       } else {
         Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
@@ -118,6 +131,7 @@ private fun ProviderCard(label: String, accent: Color, status: ProviderStatus) {
       text =
         when (status.mode) {
           "api" -> "$" + "%.2f".format(status.balance ?: 0.0)
+          "usage" -> "Session ${status.sessionPercent ?: 0}% used"
           "subscription" -> "SUBSCRIPTION"
           else -> "NOT SET UP"
         },
@@ -125,6 +139,14 @@ private fun ProviderCard(label: String, accent: Color, status: ProviderStatus) {
       fontFamily = FontFamily.Monospace,
       fontSize = 11.sp,
     )
+    if (status.mode == "usage" && status.weeklyPercent != null) {
+      Text(
+        text = "Weekly ${status.weeklyPercent}% used",
+        color = Color(0xFF888888),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 10.sp,
+      )
+    }
   }
 }
 
@@ -141,9 +163,19 @@ private fun FuelRing(accent: Color, status: ProviderStatus) {
         useCenter = false,
         style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
       )
-      // No live % source on Android (no CodexBar) - same decorative ~88%
-      // sweep the desktop version uses for its api/subscription modes.
-      if (status.mode != "none") {
+      if (status.mode == "usage" && status.sessionPercent != null) {
+        // Real data: fuel LEFT, not used - a full ring means plenty left,
+        // matching the desktop version's tank metaphor.
+        val left = (100 - status.sessionPercent).coerceIn(0, 100)
+        drawArc(
+          color = accent,
+          startAngle = -90f,
+          sweepAngle = 360f * (left / 100f),
+          useCenter = false,
+          style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+        )
+      } else if (status.mode != "none") {
+        // No live % (api/subscription) - decorative ~88% sweep, same as desktop
         drawArc(
           color = accent,
           startAngle = -90f,
@@ -155,21 +187,28 @@ private fun FuelRing(accent: Color, status: ProviderStatus) {
     }
     Text(
       text =
-        when (status.mode) {
-          "api" -> "$"
-          "subscription" -> "⚡"
+        when {
+          status.mode == "api" -> "$"
+          status.mode == "usage" && status.sessionPercent != null -> "${100 - status.sessionPercent}%"
+          status.mode == "subscription" -> "⚡"
           else -> "–"
         },
       color = if (status.mode == "none") Color(0xFF555555) else accent,
       fontFamily = FontFamily.Monospace,
       fontWeight = FontWeight.Bold,
-      fontSize = 22.sp,
+      fontSize = 18.sp,
     )
   }
 }
 
 @Composable
-private fun SettingsSection(initial: NodeFuelConfig, onSave: (NodeFuelConfig) -> Unit) {
+private fun SettingsSection(
+  initial: NodeFuelConfig,
+  claudeLoggedIn: Boolean,
+  onSave: (NodeFuelConfig) -> Unit,
+  onLoginClaude: () -> Unit,
+  onLogoutClaude: () -> Unit,
+) {
   var anthropicKey by remember { mutableStateOf(initial.anthropicApiKey) }
   var openaiKey by remember { mutableStateOf(initial.openaiApiKey) }
   var anthropicSub by remember { mutableStateOf(initial.anthropicSubscription) }
@@ -180,7 +219,7 @@ private fun SettingsSection(initial: NodeFuelConfig, onSave: (NodeFuelConfig) ->
     OutlinedTextField(
       value = anthropicKey,
       onValueChange = { anthropicKey = it },
-      label = { Text("API key (blank if subscription only)") },
+      label = { Text("API key (optional)") },
       modifier = Modifier.fillMaxWidth(),
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -188,13 +227,22 @@ private fun SettingsSection(initial: NodeFuelConfig, onSave: (NodeFuelConfig) ->
       Spacer(Modifier.width(8.dp))
       Text("I have a Claude subscription", color = DimText, fontSize = 12.sp)
     }
+    if (claudeLoggedIn) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("✓ Logged in - showing real usage %", color = Color(0xFF00FF88), fontSize = 12.sp)
+        Spacer(Modifier.width(12.dp))
+        OutlinedButton(onClick = onLogoutClaude) { Text("Log out") }
+      }
+    } else {
+      OutlinedButton(onClick = onLoginClaude) { Text("Log in with Claude for real usage %") }
+    }
 
     Spacer(Modifier.height(8.dp))
     Text("OPENAI / CODEX", color = NeonPink, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
     OutlinedTextField(
       value = openaiKey,
       onValueChange = { openaiKey = it },
-      label = { Text("API key (blank if subscription only)") },
+      label = { Text("API key (optional)") },
       modifier = Modifier.fillMaxWidth(),
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -202,6 +250,11 @@ private fun SettingsSection(initial: NodeFuelConfig, onSave: (NodeFuelConfig) ->
       Spacer(Modifier.width(8.dp))
       Text("I have a ChatGPT/Codex subscription", color = DimText, fontSize = 12.sp)
     }
+    Text(
+      "(Real usage login for OpenAI/Codex isn't available yet - different auth mechanism, still being investigated)",
+      color = Color(0xFF555555),
+      fontSize = 10.sp,
+    )
 
     Spacer(Modifier.height(12.dp))
     Button(onClick = { onSave(NodeFuelConfig(anthropicKey, openaiKey, anthropicSub, openaiSub)) }) {
@@ -215,7 +268,7 @@ private fun SettingsSection(initial: NodeFuelConfig, onSave: (NodeFuelConfig) ->
 fun MainScreenPreview() {
   NodeFuelTheme {
     Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-      ProviderCard("ANTHROPIC", NeonCyan, ProviderStatus("api", 12.5))
+      ProviderCard("ANTHROPIC", NeonCyan, ProviderStatus("usage", sessionPercent = 12, weeklyPercent = 4))
       ProviderCard("OPENAI", NeonPink, ProviderStatus("subscription"))
     }
   }

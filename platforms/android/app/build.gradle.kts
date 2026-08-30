@@ -81,4 +81,8 @@ dependencies {
   implementation(libs.androidx.navigation3.ui)
   implementation(libs.androidx.navigation3.runtime)
   implementation(libs.androidx.lifecycle.viewmodel.navigation3)
+
+  // Encrypted storage for the Claude session cookie (sensitive - equivalent
+  // to an auth token) captured by the in-app WebView login.
+  implementation(libs.androidx.security.crypto)
 }
