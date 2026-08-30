@@ -1,5 +1,13 @@
 package com.example.nodefuel.ui.main
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -15,11 +23,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,9 +39,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +59,8 @@ import com.example.nodefuel.data.NodeFuelConfig
 import com.example.nodefuel.data.ProviderStatus
 import com.example.nodefuel.theme.NodeFuelTheme
 import com.example.nodefuel.ui.login.ClaudeLoginScreen
+import kotlin.math.cos
+import kotlin.math.sin
 
 private val NeonCyan = Color(0xFF00D9FF)
 private val NeonPink = Color(0xFFFF006E)
@@ -69,6 +86,7 @@ fun MainScreen(
   val openai by viewModel.openai.collectAsStateWithLifecycle(ProviderStatus("none"))
   val refreshing by viewModel.refreshing.collectAsStateWithLifecycle(false)
   var showSettings by remember { mutableStateOf(false) }
+  var showAbout by remember { mutableStateOf(false) }
 
   Box(modifier.fillMaxSize().background(DarkBg).padding(20.dp)) {
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -104,7 +122,14 @@ fun MainScreen(
             "⚙",
             color = NeonCyan,
             fontSize = 20.sp,
-            modifier = Modifier.clickable { showSettings = !showSettings },
+            modifier = Modifier.clickable { showSettings = !showSettings; showAbout = false },
+          )
+          Spacer(Modifier.width(16.dp))
+          Text(
+            "ℹ",
+            color = NeonCyan,
+            fontSize = 20.sp,
+            modifier = Modifier.clickable { showAbout = !showAbout; showSettings = false },
           )
         }
       }
@@ -126,10 +151,12 @@ fun MainScreen(
           onLoginCodex = viewModel::openCodexLogin,
           onLogoutCodex = viewModel::logOutOfCodex,
         )
+      } else if (showAbout) {
+        AboutSection()
       } else {
         Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-          ProviderCard("ANTHROPIC", NeonCyan, anthropic)
-          ProviderCard("OPENAI", NeonPink, openai)
+          ProviderCard("ANTHROPIC", NeonCyan, anthropic, cyberMode = viewModel.cyberMode)
+          ProviderCard("OPENAI", NeonPink, openai, cyberMode = viewModel.cyberMode)
         }
       }
     }
@@ -137,9 +164,9 @@ fun MainScreen(
 }
 
 @Composable
-private fun ProviderCard(label: String, accent: Color, status: ProviderStatus) {
+private fun ProviderCard(label: String, accent: Color, status: ProviderStatus, cyberMode: Boolean = false) {
   Column(horizontalAlignment = Alignment.CenterHorizontally) {
-    FuelRing(accent = accent, status = status)
+    FuelRing(accent = accent, status = status, cyberMode = cyberMode)
     Spacer(Modifier.height(8.dp))
     Text(label, color = accent, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     Spacer(Modifier.height(4.dp))
@@ -171,6 +198,14 @@ private fun ProviderCard(label: String, accent: Color, status: ProviderStatus) {
         fontSize = 9.sp,
       )
     }
+    if (status.mode == "usage" && status.creditsRemaining != null && status.creditsRemaining >= 0) {
+      Text(
+        text = "%.1f credits".format(status.creditsRemaining),
+        color = Color(0xFF555555),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 9.sp,
+      )
+    }
   }
 }
 
@@ -187,10 +222,41 @@ private fun formatCountdown(resetsAtMillis: Long): String {
 }
 
 @Composable
-private fun FuelRing(accent: Color, status: ProviderStatus) {
+private fun FuelRing(accent: Color, status: ProviderStatus, cyberMode: Boolean = false) {
+  // Orbiting sparks (Cyber Mode) - points drifting around the ring,
+  // mirroring the desktop widget's "electricity traveling around the
+  // sphere" without the full lightning-bolt render. Cheap enough to just
+  // always run; only drawn when cyberMode is on.
+  val orbitTransition = rememberInfiniteTransition(label = "cyberOrbit")
+  val orbitAngle by
+    orbitTransition.animateFloat(
+      initialValue = 0f,
+      targetValue = 360f,
+      animationSpec = infiniteRepeatable(animation = tween(5200, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+      label = "orbitAngle",
+    )
+
   Box(Modifier.size(76.dp), contentAlignment = Alignment.Center) {
     Canvas(Modifier.fillMaxSize()) {
       val strokeWidth = 6.dp.toPx()
+      val radius = size.minDimension / 2f - strokeWidth
+      val center = Offset(size.width / 2f, size.height / 2f)
+
+      if (cyberMode && status.mode != "none") {
+        // Glossy orb: a radial gradient with the highlight offset toward
+        // one corner, like light catching a sphere.
+        drawCircle(
+          brush =
+            Brush.radialGradient(
+              colors = listOf(Color.White.copy(alpha = 0.35f), accent.copy(alpha = 0.55f), Color.Black.copy(alpha = 0.65f)),
+              center = Offset(center.x - radius * 0.35f, center.y - radius * 0.4f),
+              radius = radius * 1.6f,
+            ),
+          radius = radius - strokeWidth / 2f,
+          center = center,
+        )
+      }
+
       // Track
       drawArc(
         color = Color(0xFF2A2A2A),
@@ -219,6 +285,19 @@ private fun FuelRing(accent: Color, status: ProviderStatus) {
           useCenter = false,
           style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
         )
+      }
+
+      if (cyberMode && status.mode != "none") {
+        // 3 sparks drifting around the ring, 120deg apart, each with a
+        // soft glow behind a bright core.
+        val ringRadius = size.minDimension / 2f - strokeWidth / 2f
+        for (i in 0 until 3) {
+          val angleRad = Math.toRadians((orbitAngle + i * 120f).toDouble())
+          val sx = center.x + ringRadius * cos(angleRad).toFloat()
+          val sy = center.y + ringRadius * sin(angleRad).toFloat()
+          drawCircle(color = accent.copy(alpha = 0.35f), radius = strokeWidth * 1.3f, center = Offset(sx, sy))
+          drawCircle(color = Color.White, radius = strokeWidth * 0.35f, center = Offset(sx, sy))
+        }
       }
     }
     Text(
@@ -253,8 +332,21 @@ private fun SettingsSection(
   var openaiKey by remember { mutableStateOf(initial.openaiApiKey) }
   var anthropicSub by remember { mutableStateOf(initial.anthropicSubscription) }
   var openaiSub by remember { mutableStateOf(initial.openaiSubscription) }
+  var cyberMode by remember { mutableStateOf(initial.cyberMode) }
+  var refreshIntervalText by remember { mutableStateOf(initial.refreshIntervalSeconds.toString()) }
 
-  Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+  Column(
+    Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
+  ) {
+    Text("DISPLAY", color = DimText, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Switch(checked = cyberMode, onCheckedChange = { cyberMode = it })
+      Spacer(Modifier.width(8.dp))
+      Text("⚡ Cyber Mode - glossy orbs with orbiting sparks", color = DimText, fontSize = 12.sp)
+    }
+    Spacer(Modifier.height(4.dp))
+
     Text("ANTHROPIC", color = NeonCyan, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
     OutlinedTextField(
       value = anthropicKey,
@@ -302,10 +394,101 @@ private fun SettingsSection(
       OutlinedButton(onClick = onLoginCodex) { Text("Log in with ChatGPT/Codex for real usage %") }
     }
 
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+      value = refreshIntervalText,
+      onValueChange = { new -> if (new.all { it.isDigit() }) refreshIntervalText = new },
+      label = { Text("Refresh interval (seconds)") },
+      modifier = Modifier.fillMaxWidth(),
+    )
+
     Spacer(Modifier.height(12.dp))
-    Button(onClick = { onSave(NodeFuelConfig(anthropicKey, openaiKey, anthropicSub, openaiSub)) }) {
+    Button(
+      onClick = {
+        val interval = refreshIntervalText.toIntOrNull()?.coerceIn(10, 3600) ?: 60
+        onSave(NodeFuelConfig(anthropicKey, openaiKey, anthropicSub, openaiSub, cyberMode, interval))
+      }
+    ) {
       Text("SAVE")
     }
+  }
+}
+
+@Composable
+private fun AboutSection() {
+  val context = LocalContext.current
+  var showLicense by remember { mutableStateOf(false) }
+  fun openUrl(url: String) {
+    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+  }
+
+  Column(
+    Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Image(painter = painterResource(R.drawable.nodefuel_logo), contentDescription = null, modifier = Modifier.height(48.dp))
+      Spacer(Modifier.width(12.dp))
+      Column {
+        Text("NodeFuel 0.1.0", color = NeonPink, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Text("Track your AI API credits from Anthropic and OpenAI", color = DimText, fontSize = 12.sp)
+      }
+    }
+    Spacer(Modifier.height(8.dp))
+    Text(
+      "Website",
+      color = NeonCyan,
+      fontFamily = FontFamily.Monospace,
+      modifier = Modifier.clickable { openUrl("https://github.com/nearcore/NodeFuel") },
+    )
+    Text(
+      "Get Help",
+      color = NeonCyan,
+      fontFamily = FontFamily.Monospace,
+      modifier = Modifier.clickable { openUrl("https://github.com/nearcore/NodeFuel/issues") },
+    )
+    Text("© 2026 Mark Nephi Javier", color = DimText, fontSize = 12.sp)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Text("License: MIT", color = DimText, fontSize = 12.sp)
+      Spacer(Modifier.width(12.dp))
+      OutlinedButton(onClick = { showLicense = true }) { Text("Read License") }
+    }
+    Spacer(Modifier.height(8.dp))
+    Text("Authors", color = DimText, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Text("👤", fontSize = 12.sp)
+      Spacer(Modifier.width(6.dp))
+      Text("Mark Nephi Javier", color = NeonCyan, fontSize = 12.sp)
+    }
+  }
+
+  if (showLicense) {
+    AlertDialog(
+      onDismissRequest = { showLicense = false },
+      confirmButton = { TextButton(onClick = { showLicense = false }) { Text("Close") } },
+      title = { Text("MIT License") },
+      text = {
+        Text(
+          "Copyright (c) 2026 Mark Nephi Javier\n\n" +
+            "Permission is hereby granted, free of charge, to any person obtaining a copy " +
+            "of this software and associated documentation files (the \"Software\"), to deal " +
+            "in the Software without restriction, including without limitation the rights " +
+            "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell " +
+            "copies of the Software, and to permit persons to whom the Software is " +
+            "furnished to do so, subject to the following conditions:\n\n" +
+            "The above copyright notice and this permission notice shall be included in " +
+            "all copies or substantial portions of the Software.\n\n" +
+            "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR " +
+            "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, " +
+            "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE " +
+            "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER " +
+            "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, " +
+            "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN " +
+            "THE SOFTWARE.",
+          fontSize = 11.sp,
+        )
+      },
+    )
   }
 }
 

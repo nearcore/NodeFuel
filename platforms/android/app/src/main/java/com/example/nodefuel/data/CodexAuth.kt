@@ -221,8 +221,16 @@ object CodexAuth {
       val sessionPercent = primary?.let { if (it.has("used_percent")) it.getInt("used_percent") else null }
       val weeklyPercent = secondary?.let { if (it.has("used_percent")) it.getInt("used_percent") else null }
       val resetsAtMillis = primary?.let { if (it.has("reset_at")) it.getLong("reset_at") * 1000 else null }
+      // credits.balance is a decimal string ("43.6299990000"), not a number
+      val creditsRemaining = JSONObject(body).optJSONObject("credits")?.optString("balance", "")?.toDoubleOrNull()
 
-      ProviderStatus(mode = "usage", sessionPercent = sessionPercent, weeklyPercent = weeklyPercent, resetsAtMillis = resetsAtMillis)
+      ProviderStatus(
+        mode = "usage",
+        sessionPercent = sessionPercent,
+        weeklyPercent = weeklyPercent,
+        resetsAtMillis = resetsAtMillis,
+        creditsRemaining = creditsRemaining,
+      )
     } catch (e: Exception) {
       Log.w(TAG, "Codex usage fetch error", e)
       null

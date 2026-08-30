@@ -32,6 +32,7 @@ data class ProviderStatus(
   val sessionPercent: Int? = null,
   val weeklyPercent: Int? = null,
   val resetsAtMillis: Long? = null, // epoch millis - when the session window resets
+  val creditsRemaining: Double? = null, // extra $ credits beyond the plan limit, if any (matches desktop's "X.X credits" line)
 )
 
 data class NodeFuelConfig(
@@ -39,6 +40,8 @@ data class NodeFuelConfig(
   val openaiApiKey: String = "",
   val anthropicSubscription: Boolean = false,
   val openaiSubscription: Boolean = false,
+  val cyberMode: Boolean = false,
+  val refreshIntervalSeconds: Int = 60,
 )
 
 class DataRepository(private val context: Context) {
@@ -72,6 +75,8 @@ class DataRepository(private val context: Context) {
       openaiApiKey = prefs.getString("openai_api_key", "") ?: "",
       anthropicSubscription = prefs.getBoolean("anthropic_subscription", false),
       openaiSubscription = prefs.getBoolean("openai_subscription", false),
+      cyberMode = prefs.getBoolean("cyber_mode", false),
+      refreshIntervalSeconds = prefs.getInt("refresh_interval_seconds", 60),
     )
 
   fun saveConfig(config: NodeFuelConfig) {
@@ -81,6 +86,8 @@ class DataRepository(private val context: Context) {
       .putString("openai_api_key", config.openaiApiKey)
       .putBoolean("anthropic_subscription", config.anthropicSubscription)
       .putBoolean("openai_subscription", config.openaiSubscription)
+      .putBoolean("cyber_mode", config.cyberMode)
+      .putInt("refresh_interval_seconds", config.refreshIntervalSeconds.coerceIn(10, 3600))
       .apply()
   }
 
@@ -217,12 +224,14 @@ class DataRepository(private val context: Context) {
       val sessionPercent = extractPercent(usageJson, "five_hour", "session")
       val weeklyPercent = extractPercent(usageJson, "seven_day", "weekly", "week")
       val resetsAtMillis = extractResetMillis(usageJson, "five_hour", "session")
+      val creditsRemaining = extractClaudeCreditsRemaining(usageJson)
 
       return ProviderStatus(
         mode = "usage",
         sessionPercent = sessionPercent,
         weeklyPercent = weeklyPercent,
         resetsAtMillis = resetsAtMillis,
+        creditsRemaining = creditsRemaining,
       )
     } catch (e: Exception) {
       Log.w(TAG, "fetchClaudeUsageViaSession failed", e)
@@ -244,6 +253,25 @@ class DataRepository(private val context: Context) {
           if (value != null) return (if (value <= 1.0) value * 100 else value).toInt()
         }
       }
+    }
+    return null
+  }
+
+  // Extra $ credits beyond the plan limit - only present for accounts that
+  // have "usage credits" enabled (see claude.ai's own billing settings).
+  // This account's own response has both fields disabled/null, so this is
+  // best-effort/untested against a live positive value; mirrors codexbar's
+  // "credits.remaining" field, which is what the desktop widget shows.
+  private fun extractClaudeCreditsRemaining(json: JSONObject): Double? {
+    val spend = json.optJSONObject("spend")
+    if (spend != null && spend.has("balance") && !spend.isNull("balance")) {
+      (spend.opt("balance") as? Number)?.toDouble()?.let { return it }
+    }
+    val extra = json.optJSONObject("extra_usage")
+    if (extra != null && extra.optBoolean("is_enabled", false)) {
+      val limit = extra.opt("monthly_limit") as? Number
+      val used = extra.opt("used_credits") as? Number
+      if (limit != null && used != null) return (limit.toDouble() - used.toDouble()).coerceAtLeast(0.0)
     }
     return null
   }

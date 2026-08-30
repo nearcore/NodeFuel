@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.nodefuel.data.DataRepository
 import com.example.nodefuel.data.NodeFuelConfig
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainScreenViewModel(application: Application) : AndroidViewModel(application) {
@@ -25,8 +26,20 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
   var codexLoginStatus by mutableStateOf<String?>(null) // null = idle, else a short status message
     private set
 
+  // Read once at startup and again after every saveConfig() - the auto-
+  // refresh loop below re-reads it each cycle, so a changed interval takes
+  // effect on its next tick without needing to restart the app.
+  var cyberMode by mutableStateOf(repository.loadConfig().cyberMode)
+    private set
+
   init {
     refresh()
+    viewModelScope.launch {
+      while (true) {
+        delay(repository.loadConfig().refreshIntervalSeconds.coerceIn(10, 3600) * 1000L)
+        repository.refresh()
+      }
+    }
   }
 
   fun refresh() {
@@ -37,6 +50,7 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
 
   fun saveConfig(config: NodeFuelConfig) {
     repository.saveConfig(config)
+    cyberMode = config.cyberMode
     refresh()
   }
 
