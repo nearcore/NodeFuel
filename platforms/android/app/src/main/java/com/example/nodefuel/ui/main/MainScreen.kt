@@ -1,6 +1,7 @@
 package com.example.nodefuel.ui.main
 
 import android.content.Intent
+import android.graphics.Color as AndroidColor
 import android.net.Uri
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,6 +35,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,9 +45,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -59,8 +67,10 @@ import com.example.nodefuel.data.NodeFuelConfig
 import com.example.nodefuel.data.ProviderStatus
 import com.example.nodefuel.theme.NodeFuelTheme
 import com.example.nodefuel.ui.login.ClaudeLoginScreen
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlinx.coroutines.delay
 
 private val NeonCyan = Color(0xFF00D9FF)
 private val NeonPink = Color(0xFFFF006E)
@@ -221,40 +231,234 @@ private fun formatCountdown(resetsAtMillis: Long): String {
   return if (h > 0) "${h}h ${m}m" else "${m}m"
 }
 
+// One lightning "surge" slot - ported field-for-field from StatusRing.qml's
+// `surges` entries. Plain mutable fields, not Compose State: they're only
+// ever mutated from the single LaunchedEffect tick loop below, and read
+// from the Canvas draw phase, which already redraws every frame because it
+// reads the animated `lightAngle` state - no separate observability needed.
+private class LightningSlot {
+  var active = false
+  var points: List<Offset> = emptyList()
+  var startTime = 0L
+  var growDuration = 0L
+  var fadeDuration = 0L
+  var nextSpawnAt = 0L
+}
+
+// 0 (dim rim / facing away from the light) - 1 (bright, facing the light).
+// Direct port of StatusRing.qml's surfaceBrightness().
+private fun surfaceBrightness(p: Offset, cx: Float, cy: Float, r: Float, lightAngle: Float): Float {
+  val dx = p.x - cx
+  val dy = p.y - cy
+  val d = kotlin.math.sqrt(dx * dx + dy * dy) / r
+  val limb = kotlin.math.sqrt((1f - d * d * 0.85f).coerceAtLeast(0f))
+  val lightDot = cos(atan2(dy, dx) - lightAngle)
+  val lightBias = 0.55f + 0.45f * lightDot.coerceAtLeast(0f)
+  return limb * lightBias
+}
+
+// Keeps a point within an outer band so surges hug the sphere's surface
+// and stay clear of the centered percentage text. Port of clampAnnulus().
+private fun clampAnnulus(x: Float, y: Float, cx: Float, cy: Float, minR: Float, maxR: Float): Offset {
+  val dx = x - cx
+  val dy = y - cy
+  val d = kotlin.math.sqrt(dx * dx + dy * dy).let { if (it == 0f) 1f else it }
+  val clamped = d.coerceIn(minR, maxR)
+  return Offset(cx + dx / d * clamped, cy + dy / d * clamped)
+}
+
+// A jagged 3-4 segment zigzag path between two random points on the sphere.
+// Port of makePath().
+private fun makeSurgePath(cx: Float, cy: Float, r: Float): List<Offset> {
+  val minR = r * 0.5f
+  val maxR = r * 0.92f
+  val a1 = (Math.random() * Math.PI * 2).toFloat()
+  val a2 = a1 + (Math.PI * (0.4 + Math.random() * 0.9)).toFloat()
+  val x0 = cx + r * cos(a1) * 0.85f
+  val y0 = cy + r * sin(a1) * 0.85f
+  val x1 = cx + r * cos(a2) * 0.85f
+  val y1 = cy + r * sin(a2) * 0.85f
+
+  val segments = 3 + (Math.random() * 2).toInt()
+  val points = mutableListOf(Offset(x0, y0))
+  val dx = x1 - x0
+  val dy = y1 - y0
+  val len = kotlin.math.sqrt(dx * dx + dy * dy).let { if (it == 0f) 1f else it }
+  val nx = -dy / len
+  val ny = dx / len
+
+  for (i in 1 until segments) {
+    val t = i.toFloat() / segments
+    val mx = x0 + dx * t
+    val my = y0 + dy * t
+    val offset = ((Math.random() - 0.5) * r * 0.3).toFloat()
+    points.add(clampAnnulus(mx + nx * offset, my + ny * offset, cx, cy, minR, maxR))
+  }
+  points.add(Offset(x1, y1))
+  return points
+}
+
+private fun spawnSurge(slot: LightningSlot, now: Long, cx: Float, cy: Float, r: Float) {
+  slot.active = true
+  slot.points = makeSurgePath(cx, cy, r)
+  slot.startTime = now
+  slot.growDuration = (150 + Math.random() * 250).toLong()
+  slot.fadeDuration = (150 + Math.random() * 200).toLong()
+}
+
+// Progressively reveals each active slot's path, jitters it fresh every
+// call (this runs once per drawn frame, same as the desktop's per-tick
+// re-roll), and strokes a wide translucent glow pass plus a thin bright
+// core pass. Port of drawSurge().
+private fun DrawScope.drawLightningSurges(slots: List<LightningSlot>, accent: Color, cx: Float, cy: Float, r: Float, lightAngle: Float) {
+  val now = System.currentTimeMillis()
+  for (slot in slots) {
+    if (!slot.active) continue
+    val elapsed = now - slot.startTime
+    val growT = (elapsed.toFloat() / slot.growDuration).coerceIn(0f, 1f)
+    val totalSegs = slot.points.size - 1
+    val revealSegs = growT * totalSegs
+    val fullIdx = revealSegs.toInt().coerceAtMost(totalSegs)
+    val frac = revealSegs - fullIdx
+
+    val drawPoints = slot.points.subList(0, fullIdx + 1).toMutableList()
+    if (fullIdx < totalSegs) {
+      val p0 = slot.points[fullIdx]
+      val p1 = slot.points[fullIdx + 1]
+      drawPoints.add(Offset(p0.x + (p1.x - p0.x) * frac, p0.y + (p1.y - p0.y) * frac))
+    }
+    if (drawPoints.size < 2) continue
+
+    var fadeAlpha = 1f
+    if (elapsed > slot.growDuration) {
+      fadeAlpha = (1f - (elapsed - slot.growDuration).toFloat() / slot.fadeDuration).coerceIn(0f, 1f)
+    }
+    if (fadeAlpha <= 0f) continue
+
+    val midIdx = drawPoints.size / 2
+    val brightness = surfaceBrightness(drawPoints[midIdx], cx, cy, r, lightAngle) * fadeAlpha
+
+    val jitter = r * 0.05f
+    val jittered = drawPoints.map { p -> Offset(p.x + ((Math.random() - 0.5) * jitter).toFloat(), p.y + ((Math.random() - 0.5) * jitter).toFloat()) }
+
+    val path = Path().apply {
+      moveTo(jittered[0].x, jittered[0].y)
+      for (i in 1 until jittered.size) lineTo(jittered[i].x, jittered[i].y)
+    }
+
+    val glowWidth = (r * 0.09f).coerceAtLeast(1.1f)
+    val coreWidth = (r * 0.032f).coerceAtLeast(0.5f)
+
+    drawPath(path, color = accent, alpha = 0.45f * brightness, style = Stroke(width = glowWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    drawPath(
+      path,
+      color = Color.White,
+      alpha = (0.3f + 0.65f * brightness).coerceIn(0f, 1f),
+      style = Stroke(width = coreWidth, cap = StrokeCap.Round, join = StrokeJoin.Round),
+    )
+  }
+}
+
+// Qt.lighter()/Qt.darker() work in HSV space, scaling the V channel by a
+// factor - these mirror that so the sphere's gradient stops match the
+// desktop widget's exactly, not an approximation.
+private fun Color.qtLighter(factor: Float): Color {
+  val hsv = FloatArray(3)
+  AndroidColor.colorToHSV(this.toArgb(), hsv)
+  hsv[2] = (hsv[2] * factor).coerceAtMost(1f)
+  return Color(AndroidColor.HSVToColor(hsv))
+}
+
+private fun Color.qtDarker(factor: Float): Color {
+  val hsv = FloatArray(3)
+  AndroidColor.colorToHSV(this.toArgb(), hsv)
+  hsv[2] = hsv[2] / factor
+  return Color(AndroidColor.HSVToColor(hsv))
+}
+
 @Composable
 private fun FuelRing(accent: Color, status: ProviderStatus, cyberMode: Boolean = false) {
-  // Orbiting sparks (Cyber Mode) - points drifting around the ring,
-  // mirroring the desktop widget's "electricity traveling around the
-  // sphere" without the full lightning-bolt render. Cheap enough to just
-  // always run; only drawn when cyberMode is on.
-  val orbitTransition = rememberInfiniteTransition(label = "cyberOrbit")
-  val orbitAngle by
-    orbitTransition.animateFloat(
-      initialValue = 0f,
-      targetValue = 360f,
-      animationSpec = infiniteRepeatable(animation = tween(5200, easing = LinearEasing), repeatMode = RepeatMode.Restart),
-      label = "orbitAngle",
+  val active = cyberMode && status.mode != "none"
+  val density = LocalDensity.current
+  val ringPx = with(density) { 76.dp.toPx() }
+  val cx = ringPx / 2f
+  val cy = ringPx / 2f
+  val sphereR = ringPx / 2f - with(density) { 4.dp.toPx() }
+
+  // Light source angle - one full turn every 13s, matching the desktop's
+  // "very slowly spinning sphere" illusion. Drives the gradient focal
+  // point, the specular highlight, and the lightning's brightness bias in
+  // sync, exactly like StatusRing.qml's `lightAngle` property.
+  val lightAngleTransition = rememberInfiniteTransition(label = "cyberLight")
+  val lightAngleDeg by
+    lightAngleTransition.animateFloat(
+      initialValue = 225f,
+      targetValue = 225f + 360f,
+      animationSpec = infiniteRepeatable(animation = tween(13000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+      label = "lightAngle",
     )
+  val lightAngle = Math.toRadians(lightAngleDeg.toDouble()).toFloat()
+
+  // 4 independent lightning surge slots, ticking ~25fps - port of the
+  // desktop's Canvas+Timer tick()/spawn() pair. The Canvas below redraws
+  // every frame anyway (it reads the animated lightAngle), so this loop
+  // only needs to own the spawn/expire state machine.
+  val slots = remember { List(4) { LightningSlot() } }
+  LaunchedEffect(active) {
+    if (!active) return@LaunchedEffect
+    val now0 = System.currentTimeMillis()
+    slots.forEachIndexed { i, s -> s.nextSpawnAt = now0 + i * 120 + (Math.random() * 200).toLong() }
+    while (true) {
+      delay(40)
+      val now = System.currentTimeMillis()
+      for (s in slots) {
+        if (!s.active) {
+          if (now >= s.nextSpawnAt) spawnSurge(s, now, cx, cy, sphereR)
+        } else if (now - s.startTime > s.growDuration + s.fadeDuration) {
+          s.active = false
+          s.nextSpawnAt = now + 120 + (Math.random() * 500).toLong()
+        }
+      }
+      if (slots.all { !it.active }) spawnSurge(slots[0], now, cx, cy, sphereR)
+    }
+  }
 
   Box(Modifier.size(76.dp), contentAlignment = Alignment.Center) {
     Canvas(Modifier.fillMaxSize()) {
       val strokeWidth = 6.dp.toPx()
-      val radius = size.minDimension / 2f - strokeWidth
       val center = Offset(size.width / 2f, size.height / 2f)
 
-      if (cyberMode && status.mode != "none") {
-        // Glossy orb: a radial gradient with the highlight offset toward
-        // one corner, like light catching a sphere.
+      if (active) {
+        // True radial-gradient sphere: bright off-center highlight fading
+        // through the accent color to a near-black limb, focal point
+        // sliding with lightAngle - port of StatusRing.qml's RadialGradient.
+        val focal = Offset(center.x + cos(lightAngle) * sphereR * 0.45f, center.y + sin(lightAngle) * sphereR * 0.45f)
         drawCircle(
           brush =
             Brush.radialGradient(
-              colors = listOf(Color.White.copy(alpha = 0.35f), accent.copy(alpha = 0.55f), Color.Black.copy(alpha = 0.65f)),
-              center = Offset(center.x - radius * 0.35f, center.y - radius * 0.4f),
-              radius = radius * 1.6f,
+              colorStops =
+                arrayOf(
+                  0.0f to accent.qtLighter(2.1f),
+                  0.35f to accent,
+                  0.75f to accent.qtDarker(3.5f),
+                  1.0f to Color(0xFF020204),
+                ),
+              center = focal,
+              radius = sphereR,
             ),
-          radius = radius - strokeWidth / 2f,
+          radius = sphereR,
           center = center,
         )
+
+        // Specular glint - 3 nested, shrinking, increasingly-opaque white
+        // circles offset toward the light, faking a soft glossy highlight.
+        val gx = center.x + cos(lightAngle) * (ringPx * 0.22f)
+        val gy = center.y + sin(lightAngle) * (ringPx * 0.22f)
+        for ((glintSize, alpha) in listOf(0.20f to 0.10f, 0.13f to 0.18f, 0.07f to 0.30f)) {
+          drawCircle(color = Color.White.copy(alpha = alpha), radius = ringPx * glintSize / 2f, center = Offset(gx, gy))
+        }
+
+        drawLightningSurges(slots, accent, cx, cy, sphereR, lightAngle)
       }
 
       // Track
@@ -286,28 +490,28 @@ private fun FuelRing(accent: Color, status: ProviderStatus, cyberMode: Boolean =
           style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
         )
       }
-
-      if (cyberMode && status.mode != "none") {
-        // 3 sparks drifting around the ring, 120deg apart, each with a
-        // soft glow behind a bright core.
-        val ringRadius = size.minDimension / 2f - strokeWidth / 2f
-        for (i in 0 until 3) {
-          val angleRad = Math.toRadians((orbitAngle + i * 120f).toDouble())
-          val sx = center.x + ringRadius * cos(angleRad).toFloat()
-          val sy = center.y + ringRadius * sin(angleRad).toFloat()
-          drawCircle(color = accent.copy(alpha = 0.35f), radius = strokeWidth * 1.3f, center = Offset(sx, sy))
-          drawCircle(color = Color.White, radius = strokeWidth * 0.35f, center = Offset(sx, sy))
-        }
+    }
+    val centerText =
+      when {
+        status.mode == "api" -> "$"
+        status.mode == "usage" && status.sessionPercent != null -> "${100 - status.sessionPercent}%"
+        status.mode == "subscription" -> "⚡"
+        else -> "–"
       }
+    if (active) {
+      // Cheap 4-direction-ish outline so the percentage stays legible over
+      // the lightning - port of StatusRing.qml's offset black duplicate.
+      Text(
+        text = centerText,
+        color = Color.Black.copy(alpha = 0.7f),
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Bold,
+        fontSize = 18.sp,
+        modifier = Modifier.offset(x = 1.dp, y = 1.dp),
+      )
     }
     Text(
-      text =
-        when {
-          status.mode == "api" -> "$"
-          status.mode == "usage" && status.sessionPercent != null -> "${100 - status.sessionPercent}%"
-          status.mode == "subscription" -> "⚡"
-          else -> "–"
-        },
+      text = centerText,
       color = if (status.mode == "none") Color(0xFF555555) else accent,
       fontFamily = FontFamily.Monospace,
       fontWeight = FontWeight.Bold,

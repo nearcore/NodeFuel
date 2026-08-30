@@ -285,17 +285,30 @@ class DataRepository(private val context: Context) {
       for (field in listOf("resets_at", "resetsAt", "reset_at", "resetAt")) {
         val raw = obj.optString(field, "")
         if (raw.isNotBlank()) {
-          try {
-            val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
-            fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
-            fmt.parse(raw)?.let { return it.time }
-          } catch (e: Exception) {
-            // try the next key/field combination
-          }
+          parseIsoToMillis(raw)?.let { return it }
         }
       }
     }
     return null
+  }
+
+  // Claude's actual shape is "2026-08-30T22:09:59.526454+00:00" (fractional
+  // seconds + a numeric "+00:00" offset) - a literal-'Z'-suffix pattern
+  // silently fails to parse that (caught above, returns null), which is
+  // why "resets in" was missing for Anthropic while Codex's raw-epoch
+  // reset_at worked fine. Every observed response uses +00:00 (UTC), so
+  // this trims the fractional part and any "Z"/offset suffix and parses
+  // the remaining "yyyy-MM-dd'T'HH:mm:ss" as UTC - handles that shape,
+  // a plain "...Z" suffix, and a bare "+00:00" offset without fractional
+  // seconds, all the same way.
+  private fun parseIsoToMillis(raw: String): Long? =
+    try {
+      val datePart = raw.substringBefore('.').substringBefore('Z').substringBefore('+')
+      val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+      fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+      fmt.parse(datePart)?.time
+    } catch (e: Exception) {
+      null
   }
 
   private fun httpGet(urlString: String, headers: Map<String, String>): String? {
