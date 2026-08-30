@@ -59,6 +59,7 @@ fun MainScreen(
   if (viewModel.showLogin) {
     ClaudeLoginScreen(
       onSessionCaptured = viewModel::onClaudeSessionCaptured,
+      onCancel = viewModel::cancelClaudeLogin,
       modifier = modifier,
     )
     return
@@ -114,12 +115,16 @@ fun MainScreen(
         SettingsSection(
           initial = viewModel.loadConfig(),
           claudeLoggedIn = viewModel.isClaudeLoggedIn(),
+          codexLoggedIn = viewModel.isCodexLoggedIn(),
+          codexLoginStatus = viewModel.codexLoginStatus,
           onSave = { config ->
             showSettings = false
             viewModel.saveConfig(config)
           },
           onLoginClaude = viewModel::openClaudeLogin,
           onLogoutClaude = viewModel::logOutOfClaude,
+          onLoginCodex = viewModel::openCodexLogin,
+          onLogoutCodex = viewModel::logOutOfCodex,
         )
       } else {
         Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
@@ -142,7 +147,7 @@ private fun ProviderCard(label: String, accent: Color, status: ProviderStatus) {
       text =
         when (status.mode) {
           "api" -> "$" + "%.2f".format(status.balance ?: 0.0)
-          "usage" -> "Session ${status.sessionPercent ?: 0}% used"
+          "usage" -> "Daily ${status.sessionPercent ?: 0}% used"
           "subscription" -> "SUBSCRIPTION"
           else -> "NOT SET UP"
         },
@@ -155,7 +160,7 @@ private fun ProviderCard(label: String, accent: Color, status: ProviderStatus) {
         text = "Weekly ${status.weeklyPercent}% used",
         color = Color(0xFF888888),
         fontFamily = FontFamily.Monospace,
-        fontSize = 10.sp,
+        fontSize = 11.sp,
       )
     }
     if (status.mode == "usage" && status.resetsAtMillis != null) {
@@ -236,9 +241,13 @@ private fun FuelRing(accent: Color, status: ProviderStatus) {
 private fun SettingsSection(
   initial: NodeFuelConfig,
   claudeLoggedIn: Boolean,
+  codexLoggedIn: Boolean,
+  codexLoginStatus: String?,
   onSave: (NodeFuelConfig) -> Unit,
   onLoginClaude: () -> Unit,
   onLogoutClaude: () -> Unit,
+  onLoginCodex: () -> Unit,
+  onLogoutCodex: () -> Unit,
 ) {
   var anthropicKey by remember { mutableStateOf(initial.anthropicApiKey) }
   var openaiKey by remember { mutableStateOf(initial.openaiApiKey) }
@@ -281,11 +290,17 @@ private fun SettingsSection(
       Spacer(Modifier.width(8.dp))
       Text("I have a ChatGPT/Codex subscription", color = DimText, fontSize = 12.sp)
     }
-    Text(
-      "(Real usage login for OpenAI/Codex isn't available yet - different auth mechanism, still being investigated)",
-      color = Color(0xFF555555),
-      fontSize = 10.sp,
-    )
+    if (codexLoggedIn) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("✓ Logged in - showing real usage %", color = Color(0xFF00FF88), fontSize = 12.sp)
+        Spacer(Modifier.width(12.dp))
+        OutlinedButton(onClick = onLogoutCodex) { Text("Log out") }
+      }
+    } else if (codexLoginStatus != null) {
+      Text(codexLoginStatus, color = NeonPink, fontSize = 12.sp)
+    } else {
+      OutlinedButton(onClick = onLoginCodex) { Text("Log in with ChatGPT/Codex for real usage %") }
+    }
 
     Spacer(Modifier.height(12.dp))
     Button(onClick = { onSave(NodeFuelConfig(anthropicKey, openaiKey, anthropicSub, openaiSub)) }) {

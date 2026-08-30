@@ -85,4 +85,8 @@ dependencies {
   // Encrypted storage for the Claude session cookie (sensitive - equivalent
   // to an auth token) captured by the in-app WebView login.
   implementation(libs.androidx.security.crypto)
+
+  // Chrome Custom Tabs - the correct way to do OAuth on Android (RFC 8252),
+  // used for the Codex/OpenAI login flow.
+  implementation(libs.androidx.browser)
 }

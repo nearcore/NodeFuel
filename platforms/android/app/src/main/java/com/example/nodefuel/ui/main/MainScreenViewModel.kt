@@ -1,6 +1,7 @@
 package com.example.nodefuel.ui.main
 
 import android.app.Application
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -20,6 +21,9 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
   var showLogin by mutableStateOf(false)
     private set
 
+  var codexLoginStatus by mutableStateOf<String?>(null) // null = idle, else a short status message
+    private set
+
   init {
     refresh()
   }
@@ -34,6 +38,8 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
     repository.saveConfig(config)
     refresh()
   }
+
+  // ---- Claude (session-cookie via in-app WebView) ----
 
   fun isClaudeLoggedIn(): Boolean = repository.isClaudeLoggedIn()
 
@@ -53,6 +59,30 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
 
   fun logOutOfClaude() {
     repository.clearClaudeSession()
+    refresh()
+  }
+
+  // ---- Codex/OpenAI (OAuth via Chrome Custom Tabs + loopback callback) ----
+
+  fun isCodexLoggedIn(): Boolean = repository.isCodexLoggedIn()
+
+  fun openCodexLogin() {
+    val authUrl = repository.startCodexLogin()
+    codexLoginStatus = "Waiting for you to finish logging in..."
+    CustomTabsIntent.Builder().build().launchUrl(getApplication(), authUrl)
+    viewModelScope.launch {
+      val success = repository.awaitCodexLoginResult()
+      codexLoginStatus = null
+      if (success) {
+        refresh()
+      } else {
+        codexLoginStatus = "Login didn't complete - try again"
+      }
+    }
+  }
+
+  fun logOutOfCodex() {
+    repository.clearCodexTokens()
     refresh()
   }
 }

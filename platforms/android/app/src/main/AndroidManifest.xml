@@ -3,6 +3,20 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Android 11+ hides other apps' packages by default (package
+         visibility) - Chrome Custom Tabs (used for the Codex/OpenAI OAuth
+         login) needs this to find an installed browser. -->
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

@@ -1,6 +1,7 @@
 package com.example.nodefuel.data
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -98,16 +99,68 @@ class DataRepository(private val context: Context) {
 
   fun isClaudeLoggedIn(): Boolean = !loadClaudeSessionKey().isNullOrBlank()
 
+  // ---- Codex/OpenAI OAuth login (PKCE, via Chrome Custom Tabs + a local
+  // loopback callback server - see CodexAuth.kt) ----
+
+  private var codexState: String? = null
+  private var codexVerifier: String? = null
+
+  /** Kicks off a login attempt and returns the URL to open in a Custom Tab. */
+  fun startCodexLogin(): Uri {
+    val state = CodexAuth.newState()
+    val verifier = CodexAuth.newCodeVerifier()
+    codexState = state
+    codexVerifier = verifier
+    return CodexAuth.buildAuthUrl(state, verifier)
+  }
+
+  /** Blocks (on IO) until the callback arrives or times out. Call after startCodexLogin(). */
+  suspend fun awaitCodexLoginResult(): Boolean =
+    withContext(Dispatchers.IO) {
+      val state = codexState ?: return@withContext false
+      val verifier = codexVerifier ?: return@withContext false
+      val code = CodexAuth.awaitAuthorizationCode(state) ?: return@withContext false
+      val tokens = CodexAuth.exchangeCodeForTokens(code, verifier) ?: return@withContext false
+      saveCodexTokens(tokens)
+      true
+    }
+
+  private fun saveCodexTokens(tokens: CodexTokens) {
+    securePrefs.edit().putString("codex_access_token", tokens.accessToken).putString("codex_refresh_token", tokens.refreshToken ?: "").apply()
+  }
+
+  fun loadCodexAccessToken(): String? = securePrefs.getString("codex_access_token", null)
+
+  fun clearCodexTokens() {
+    securePrefs.edit().remove("codex_access_token").remove("codex_refresh_token").apply()
+  }
+
+  fun isCodexLoggedIn(): Boolean = !loadCodexAccessToken().isNullOrBlank()
+
   suspend fun refresh() {
     _refreshing.value = true
     try {
       val cfg = loadConfig()
       _anthropic.value = anthropicStatus(cfg)
-      _openai.value = statusFor(cfg.openaiApiKey, cfg.openaiSubscription, ::fetchOpenAiBalance)
+      _openai.value = openaiStatus(cfg)
     } finally {
       _refreshing.value = false
     }
   }
+
+  private suspend fun openaiStatus(cfg: NodeFuelConfig): ProviderStatus =
+    withContext(Dispatchers.IO) {
+      if (cfg.openaiApiKey.isNotBlank()) {
+        return@withContext ProviderStatus(mode = "api", balance = fetchOpenAiBalance(cfg.openaiApiKey) ?: 0.0)
+      }
+      val accessToken = loadCodexAccessToken()
+      if (!accessToken.isNullOrBlank()) {
+        val usage = CodexAuth.fetchUsage(accessToken)
+        if (usage != null) return@withContext usage
+        Log.w(TAG, "Codex usage fetch failed - token may have expired")
+      }
+      if (cfg.openaiSubscription) ProviderStatus(mode = "subscription") else ProviderStatus(mode = "none")
+    }
 
   private suspend fun anthropicStatus(cfg: NodeFuelConfig): ProviderStatus =
     withContext(Dispatchers.IO) {
@@ -123,19 +176,6 @@ class DataRepository(private val context: Context) {
         Log.w(TAG, "Claude session fetch failed - session may have expired")
       }
       if (cfg.anthropicSubscription) ProviderStatus(mode = "subscription") else ProviderStatus(mode = "none")
-    }
-
-  private suspend fun statusFor(
-    apiKey: String,
-    hasSubscription: Boolean,
-    fetchBalance: (String) -> Double?,
-  ): ProviderStatus =
-    withContext(Dispatchers.IO) {
-      when {
-        apiKey.isNotBlank() -> ProviderStatus(mode = "api", balance = fetchBalance(apiKey) ?: 0.0)
-        hasSubscription -> ProviderStatus(mode = "subscription")
-        else -> ProviderStatus(mode = "none")
-      }
     }
 
   // Mirrors backend/main.py's fetch_anthropic_balance() - official API key path
