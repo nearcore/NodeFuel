@@ -30,6 +30,7 @@ data class ProviderStatus(
   val balance: Double? = null,
   val sessionPercent: Int? = null,
   val weeklyPercent: Int? = null,
+  val resetsAtMillis: Long? = null, // epoch millis - when the session window resets
 )
 
 data class NodeFuelConfig(
@@ -175,8 +176,14 @@ class DataRepository(private val context: Context) {
       val usageJson = JSONObject(usageBody)
       val sessionPercent = extractPercent(usageJson, "five_hour", "session")
       val weeklyPercent = extractPercent(usageJson, "seven_day", "weekly", "week")
+      val resetsAtMillis = extractResetMillis(usageJson, "five_hour", "session")
 
-      return ProviderStatus(mode = "usage", sessionPercent = sessionPercent, weeklyPercent = weeklyPercent)
+      return ProviderStatus(
+        mode = "usage",
+        sessionPercent = sessionPercent,
+        weeklyPercent = weeklyPercent,
+        resetsAtMillis = resetsAtMillis,
+      )
     } catch (e: Exception) {
       Log.w(TAG, "fetchClaudeUsageViaSession failed", e)
       return null
@@ -195,6 +202,28 @@ class DataRepository(private val context: Context) {
           val raw = obj.opt(field)
           val value = (raw as? Number)?.toDouble() ?: (raw as? String)?.toDoubleOrNull()
           if (value != null) return (if (value <= 1.0) value * 100 else value).toInt()
+        }
+      }
+    }
+    return null
+  }
+
+  // Same defensive multi-key-name approach as extractPercent(), for the
+  // reset timestamp. Parsed with SimpleDateFormat rather than java.time,
+  // since minSdk 24 predates java.time without core library desugaring.
+  private fun extractResetMillis(json: JSONObject, vararg keys: String): Long? {
+    for (key in keys) {
+      val obj = json.optJSONObject(key) ?: continue
+      for (field in listOf("resets_at", "resetsAt", "reset_at", "resetAt")) {
+        val raw = obj.optString(field, "")
+        if (raw.isNotBlank()) {
+          try {
+            val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+            fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            fmt.parse(raw)?.let { return it.time }
+          } catch (e: Exception) {
+            // try the next key/field combination
+          }
         }
       }
     }

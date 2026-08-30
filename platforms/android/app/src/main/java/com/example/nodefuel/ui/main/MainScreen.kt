@@ -147,7 +147,27 @@ private fun ProviderCard(label: String, accent: Color, status: ProviderStatus) {
         fontSize = 10.sp,
       )
     }
+    if (status.mode == "usage" && status.resetsAtMillis != null) {
+      Text(
+        text = "resets in ${formatCountdown(status.resetsAtMillis)}",
+        color = Color(0xFF555555),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 9.sp,
+      )
+    }
   }
+}
+
+// "resets in Xh Ym" / "resets in Xm" / "resetting..." - same shape as the
+// desktop widget's live countdown, computed once per fetch rather than
+// ticking continuously (this screen re-renders on refresh, not idle).
+private fun formatCountdown(resetsAtMillis: Long): String {
+  val diffMs = resetsAtMillis - System.currentTimeMillis()
+  if (diffMs <= 0) return "resetting..."
+  val diffMin = diffMs / 60_000
+  val h = diffMin / 60
+  val m = diffMin % 60
+  return if (h > 0) "${h}h ${m}m" else "${m}m"
 }
 
 @Composable
