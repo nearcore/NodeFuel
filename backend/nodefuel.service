@@ -1,0 +1,14 @@
+[Unit]
+Description=NodeFuel AI Credit Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%u
+ExecStart=%h/.local/bin/nodefuel-service
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

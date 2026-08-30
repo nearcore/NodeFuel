@@ -1,0 +1,11 @@
+{
+  "anthropic_api_key": "",
+  "openai_api_key": "",
+  "anthropic_subscription": true,
+  "openai_subscription": true,
+  "anthropic_use_codexbar": true,
+  "openai_use_codexbar": true,
+  "anthropic_codexbar_provider": "claude",
+  "openai_codexbar_provider": "codex",
+  "refresh_interval": 60
+}
