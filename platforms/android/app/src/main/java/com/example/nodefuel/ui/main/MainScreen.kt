@@ -1,6 +1,7 @@
 package com.example.nodefuel.ui.main
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavKey
+import com.example.nodefuel.R
 import com.example.nodefuel.data.NodeFuelConfig
 import com.example.nodefuel.data.ProviderStatus
 import com.example.nodefuel.theme.NodeFuelTheme
@@ -73,13 +76,21 @@ fun MainScreen(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Text(
-          "⚡ NODEFUEL",
-          color = NeonPink,
-          fontFamily = FontFamily.Monospace,
-          fontWeight = FontWeight.Bold,
-          fontSize = 18.sp,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Image(
+            painter = painterResource(R.drawable.nodefuel_logo),
+            contentDescription = null,
+            modifier = Modifier.height(28.dp),
+          )
+          Spacer(Modifier.width(6.dp))
+          Text(
+            "NODEFUEL",
+            color = NeonPink,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            fontSize = 18.sp,
+          )
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
           Text(
             if (refreshing) "..." else "↻",
