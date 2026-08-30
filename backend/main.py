@@ -46,6 +46,7 @@ DEFAULT_CONFIG = {
     "anthropic_codexbar_provider": "claude",
     "openai_codexbar_provider": "codex",
     "refresh_interval": 60,
+    "cyber_mode": False,  # Windows app only - Linux widget stores this in KDE's own kcfg instead
 }
 
 
@@ -64,10 +65,27 @@ class NodeFuelService:
 
     def find_codexbar(self):
         """
-        Locate the codexbar CLI. shutil.which() alone isn't enough - systemd
-        user services run with a minimal PATH that doesn't include
-        ~/.local/bin, where codexbar is typically installed.
+        Locate the codexbar CLI, cross-platform.
+        - Linux: shutil.which() alone isn't enough - systemd user services run
+          with a minimal PATH that doesn't include ~/.local/bin, where
+          codexbar is typically installed, so check that explicitly too.
+        - Windows: the CLI ships as codexbar-cli.exe (the tray app itself is
+          codexbar.exe - not what we want to shell out to). Check PATH, then
+          the common per-user install locations the Windows installer uses.
         """
+        if sys.platform == "win32":
+            found = shutil.which("codexbar-cli") or shutil.which("codexbar-cli.exe")
+            if found:
+                return found
+            candidates = [
+                Path.home() / "AppData" / "Local" / "CodexBar" / "codexbar-cli.exe",
+                Path.home() / "AppData" / "Local" / "Programs" / "CodexBar" / "codexbar-cli.exe",
+            ]
+            for c in candidates:
+                if c.exists():
+                    return str(c)
+            return None
+
         found = shutil.which("codexbar")
         if found:
             return found
