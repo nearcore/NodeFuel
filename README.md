@@ -4,7 +4,7 @@ A cyberpunk-themed KDE Plasma widget that tracks your Anthropic and OpenAI usage
 
 ![platform](https://img.shields.io/badge/platform-Linux%20%2F%20KDE%20Plasma%206-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
-> **Platform status:** Linux (KDE Plasma 6) is the finished version. A [Windows build](platforms/windows/) exists and works in headless testing, but hasn't been run on a real Windows machine yet. Android is planned but not started — see [Roadmap](#roadmap).
+> **Platform status:** Linux (KDE Plasma 6) is the finished version. A [Windows build](platforms/windows/) exists and works in headless testing but hasn't run on a real Windows machine yet. An [Android build](platforms/android/) compiles cleanly and is ready to install, with a smaller feature set (no CodexBar equivalent on mobile, no Cyber Mode yet) — see [Roadmap](#roadmap).
 
 ## What it does
 
@@ -115,7 +115,7 @@ NodeFuel/
 ## Roadmap
 
 - [x] Windows version — see [`platforms/windows/`](platforms/windows/) (needs real-machine testing)
-- [ ] Android version
+- [x] Android version — see [`platforms/android/`](platforms/android/) (API-key mode only so far; no real subscription usage % or Cyber Mode yet)
 - [ ] Usage history charts
 - [ ] Budget alerts
 - [ ] Multiple account support per provider
