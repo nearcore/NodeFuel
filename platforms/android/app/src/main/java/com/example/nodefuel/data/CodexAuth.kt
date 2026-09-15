@@ -221,6 +221,7 @@ object CodexAuth {
       val sessionPercent = primary?.let { if (it.has("used_percent")) it.getInt("used_percent") else null }
       val weeklyPercent = secondary?.let { if (it.has("used_percent")) it.getInt("used_percent") else null }
       val resetsAtMillis = primary?.let { if (it.has("reset_at")) it.getLong("reset_at") * 1000 else null }
+      val weeklyResetsAtMillis = secondary?.let { if (it.has("reset_at")) it.getLong("reset_at") * 1000 else null }
       // credits.balance is a decimal string ("43.6299990000"), not a number
       val creditsRemaining = JSONObject(body).optJSONObject("credits")?.optString("balance", "")?.toDoubleOrNull()
 
@@ -229,6 +230,7 @@ object CodexAuth {
         sessionPercent = sessionPercent,
         weeklyPercent = weeklyPercent,
         resetsAtMillis = resetsAtMillis,
+        weeklyResetsAtMillis = weeklyResetsAtMillis,
         creditsRemaining = creditsRemaining,
       )
     } catch (e: Exception) {

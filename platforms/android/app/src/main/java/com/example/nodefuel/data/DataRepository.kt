@@ -31,7 +31,8 @@ data class ProviderStatus(
   val balance: Double? = null,
   val sessionPercent: Int? = null,
   val weeklyPercent: Int? = null,
-  val resetsAtMillis: Long? = null, // epoch millis - when the session window resets
+  val resetsAtMillis: Long? = null, // epoch millis - when the session/daily window resets
+  val weeklyResetsAtMillis: Long? = null, // epoch millis - when the weekly window resets
   val creditsRemaining: Double? = null, // extra $ credits beyond the plan limit, if any (matches desktop's "X.X credits" line)
 )
 
@@ -224,6 +225,7 @@ class DataRepository(private val context: Context) {
       val sessionPercent = extractPercent(usageJson, "five_hour", "session")
       val weeklyPercent = extractPercent(usageJson, "seven_day", "weekly", "week")
       val resetsAtMillis = extractResetMillis(usageJson, "five_hour", "session")
+      val weeklyResetsAtMillis = extractResetMillis(usageJson, "seven_day", "weekly", "week")
       val creditsRemaining = extractClaudeCreditsRemaining(usageJson)
 
       return ProviderStatus(
@@ -231,6 +233,7 @@ class DataRepository(private val context: Context) {
         sessionPercent = sessionPercent,
         weeklyPercent = weeklyPercent,
         resetsAtMillis = resetsAtMillis,
+        weeklyResetsAtMillis = weeklyResetsAtMillis,
         creditsRemaining = creditsRemaining,
       )
     } catch (e: Exception) {

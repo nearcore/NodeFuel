@@ -187,19 +187,22 @@ Rectangle {
         return text.replace(/^Resets\s*/i, "").replace(/\s*\([^)]*\)\s*$/, "")
     }
 
-    // Live "resets in Xh Ym" countdown from an ISO8601 timestamp, falling
-    // back to the static human-readable string if no timestamp is available.
+    // Live "in Xh Ym" (or "in Xd Yh" past a day out - the weekly window
+    // needs that reach) countdown from an ISO8601 timestamp, falling back
+    // to the static human-readable string if no timestamp is available.
     function countdownText(isoString, fallbackText) {
         tick // dependency - re-evaluates on the same 15s timer as relativeUpdated
         if (!isoString) {
-            return fallbackText ? "resets " + shortenReset(fallbackText) : ""
+            return fallbackText ? shortenReset(fallbackText) : ""
         }
         const diffMs = new Date(isoString) - new Date()
-        if (diffMs <= 0) return "resetting..."
+        if (diffMs <= 0) return "resetting now"
         const diffMin = Math.floor(diffMs / 60000)
-        const h = Math.floor(diffMin / 60)
+        const d = Math.floor(diffMin / 1440)
+        const h = Math.floor((diffMin % 1440) / 60)
         const m = diffMin % 60
-        return h > 0 ? `resets in ${h}h ${m}m` : `resets in ${m}m`
+        if (d > 0) return `in ${d}d ${h}h`
+        return h > 0 ? `in ${h}h ${m}m` : `in ${m}m`
     }
 
     component ProviderCard: Column {
@@ -212,6 +215,8 @@ Rectangle {
         property real weeklyPercent: -1
         property string sessionReset: ""
         property string sessionResetAt: ""
+        property string weeklyReset: ""
+        property string weeklyResetAt: ""
         property real creditsRemaining: -1
 
         // Show what's LEFT (fuel remaining), not what's been used - fits
@@ -289,7 +294,16 @@ Rectangle {
         Text {
             visible: card.mode === "usage" && (card.sessionResetAt.length > 0 || card.sessionReset.length > 0)
             anchors.horizontalCenter: parent.horizontalCenter
-            text: full.countdownText(card.sessionResetAt, card.sessionReset)
+            text: "daily resets " + full.countdownText(card.sessionResetAt, card.sessionReset)
+            color: "#555555"
+            font.family: "Monospace"
+            font.pixelSize: 9
+        }
+
+        Text {
+            visible: card.mode === "usage" && (card.weeklyResetAt.length > 0 || card.weeklyReset.length > 0)
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "weekly resets " + full.countdownText(card.weeklyResetAt, card.weeklyReset)
             color: "#555555"
             font.family: "Monospace"
             font.pixelSize: 9
@@ -429,6 +443,8 @@ Rectangle {
                 weeklyPercent: full.ant.weekly_percent !== undefined ? full.ant.weekly_percent : -1
                 sessionReset: full.ant.session_reset || ""
                 sessionResetAt: full.ant.session_reset_at || ""
+                weeklyReset: full.ant.weekly_reset || ""
+                weeklyResetAt: full.ant.weekly_reset_at || ""
                 creditsRemaining: full.ant.credits_remaining !== undefined && full.ant.credits_remaining !== null
                     ? full.ant.credits_remaining : -1
             }
@@ -442,6 +458,8 @@ Rectangle {
                 weeklyPercent: full.oai.weekly_percent !== undefined ? full.oai.weekly_percent : -1
                 sessionReset: full.oai.session_reset || ""
                 sessionResetAt: full.oai.session_reset_at || ""
+                weeklyReset: full.oai.weekly_reset || ""
+                weeklyResetAt: full.oai.weekly_reset_at || ""
                 creditsRemaining: full.oai.credits_remaining !== undefined && full.oai.credits_remaining !== null
                     ? full.oai.credits_remaining : -1
             }
