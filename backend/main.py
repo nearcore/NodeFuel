@@ -8,6 +8,7 @@ Plasma widget.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -29,6 +30,9 @@ logger = logging.getLogger(__name__)
 CONFIG_DIR = Path.home() / ".config" / "nodefuel"
 CACHE_FILE = CONFIG_DIR / "balance_cache.json"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+# Which Claude login is in use, as last picked on the Canvas Due widget's
+# sessions page. "main" is ~/.claude; others are ~/.claude-NAME folders.
+CLAUDE_ACCOUNT_FILE = Path.home() / ".config" / "sessiondeck" / "claude-account.json"
 
 # Ensure config dir exists
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -131,6 +135,31 @@ class NodeFuelService:
         text = re.sub(r'(?<=[^\s(])\(', ' (', text)          # before "("
         return text
 
+    def claude_account(self):
+        """The Claude login to report on: {"id", "dir", "email"}, defaulting to ~/.claude."""
+        acct = {"id": "main", "dir": str(Path.home() / ".claude"), "email": ""}
+        try:
+            with open(CLAUDE_ACCOUNT_FILE) as f:
+                chosen = json.load(f)
+            if chosen.get("id") and Path(chosen.get("dir", "")).is_dir():
+                acct.update(chosen)
+        except Exception:
+            pass
+        if not acct["email"]:
+            state = Path.home() / ".claude.json" if acct["id"] == "main" else Path(acct["dir"]) / ".claude.json"
+            try:
+                with open(state) as f:
+                    acct["email"] = (json.load(f).get("oauthAccount") or {}).get("emailAddress") or ""
+            except Exception:
+                pass
+        return acct
+
+    def run_codexbar(self, provider_id, extra=(), env=None):
+        return subprocess.run(
+            [self.codexbar_path, "usage", "--provider", provider_id, "--format", "json", *extra],
+            capture_output=True, text=True, timeout=30, env=env
+        )
+
     def fetch_codexbar_usage(self, provider_id):
         """
         Fetch real session/weekly usage % via the locally-installed CodexBar
@@ -141,10 +170,18 @@ class NodeFuelService:
             logger.warning(f"codexbar CLI not found - falling back to subscription badge for {provider_id}")
             return None
         try:
-            result = subprocess.run(
-                [self.codexbar_path, "usage", "--provider", provider_id, "--format", "json"],
-                capture_output=True, text=True, timeout=30
-            )
+            account = None
+            if provider_id == "claude":
+                # The OAuth source reads the CLI login itself, so it follows
+                # CLAUDE_CONFIG_DIR to whichever account is in use. (The web
+                # source goes by browser cookies, which could be either.)
+                account = self.claude_account()
+                env = dict(os.environ, CLAUDE_CONFIG_DIR=account["dir"])
+                result = self.run_codexbar(provider_id, ("--source", "oauth"), env)
+                if result.returncode != 0 and account["id"] == "main":
+                    result = self.run_codexbar(provider_id)
+            else:
+                result = self.run_codexbar(provider_id)
             if result.returncode != 0:
                 logger.warning(f"codexbar[{provider_id}] exited {result.returncode}: {result.stderr.strip()[:200]}")
                 return None
@@ -164,6 +201,9 @@ class NodeFuelService:
                 "weekly_reset": self.normalize_reset_text(secondary.get("resetDescription")),
                 "weekly_reset_at": secondary.get("resetsAt"),
                 "credits_remaining": credits.get("remaining"),
+                "account_id": account["id"] if account else None,
+                "account_email": account["email"] if account else None,
+                "plan": usage.get("loginMethod"),
             }
         except Exception as e:
             logger.warning(f"codexbar[{provider_id}] error: {e}")

@@ -208,6 +208,8 @@ Rectangle {
     component ProviderCard: Column {
         id: card
         property string label
+        // Which login the numbers belong to, e.g. "JavierM · Team"; empty hides the line.
+        property string account: ""
         property color accent
         property string mode
         property real balance
@@ -267,6 +269,18 @@ Rectangle {
             font.pixelSize: 13
             font.bold: true
             font.letterSpacing: 1
+        }
+
+        Text {
+            visible: card.account.length > 0
+            width: card.width
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+            text: card.account
+            color: card.accent
+            opacity: 0.75
+            font.family: "Monospace"
+            font.pixelSize: 10
         }
 
         Text {
@@ -436,6 +450,9 @@ Rectangle {
 
             ProviderCard {
                 label: "ANTHROPIC"
+                account: full.ant.account_email
+                    ? full.ant.account_email.split("@")[0] + (full.ant.plan ? " · " + full.ant.plan.replace(/^Claude /, "") : "")
+                    : ""
                 accent: "#00D9FF"
                 mode: full.ant.mode || "none"
                 balance: parseFloat(full.ant.balance) || 0.0
